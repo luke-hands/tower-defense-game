@@ -106,6 +106,12 @@
         const upgradeButton = document.getElementById('upgradeButton');
         const moneyDisplay = document.getElementById('money');
 
+        // Load sprites
+        const soldierSprite = new Image();
+        soldierSprite.src = 'assets/PNG/Default size/towerDefense_tile245.png';
+        const enemySprite = new Image();
+        enemySprite.src = 'assets/PNG/Default size/towerDefense_tile268.png';
+
         let gameState = {
             money: 100,
             paused: false,
@@ -134,8 +140,9 @@
             }
 
             draw() {
-                ctx.fillStyle = this.color;
-                ctx.fillRect(this.x, this.y, this.width, this.height);
+                // Draw sprite based on entity type
+                const sprite = this instanceof Soldier ? soldierSprite : enemySprite;
+                ctx.drawImage(sprite, this.x, this.y, this.width, this.height);
                 
                 // Health bar
                 ctx.fillStyle = 'red';
