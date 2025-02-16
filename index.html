@@ -111,15 +111,21 @@
         soldierSprite.src = 'assets/PNG/Default size/towerDefense_tile245.png';
         const enemySprite = new Image();
         enemySprite.src = 'assets/PNG/Default size/towerDefense_tile268.png';
+        const obstacleSprite = new Image();
+        obstacleSprite.src = 'assets/PNG/Default size/towerDefense_tile130.png';
 
         let gameState = {
             money: 100,
             paused: false,
             soldiers: [],
             enemies: [],
+            obstacles: [],
+            projectiles: [],
             lastEnemySpawn: 0,
             enemySpawnRate: 3000,
-            score: 0
+            enemyLevel: 1,
+            score: 0,
+            wave: 1
         };
 
         const SOLDIER_COST = 50;
@@ -173,16 +179,15 @@
 
             attack(enemy) {
                 if (this.attackCooldown <= 0) {
-                    enemy.health -= this.damage;
+                    // Create a projectile instead of direct damage
+                    gameState.projectiles.push(new Projectile(
+                        this.x + this.width/2, this.y + this.height/2,
+                        enemy.x + enemy.width/2, enemy.y + enemy.height/2,
+                        5, // projectile speed
+                        this.damage,
+                        false // not an enemy projectile
+                    ));
                     this.attackCooldown = this.attackSpeed;
-                    
-                    // Visual feedback for attack
-                    ctx.beginPath();
-                    ctx.moveTo(this.x + this.width, this.y + this.height/2);
-                    ctx.lineTo(enemy.x, enemy.y + enemy.height/2);
-                    ctx.strokeStyle = '#ff0';
-                    ctx.lineWidth = 2;
-                    ctx.stroke();
                 }
             }
 
@@ -196,22 +201,169 @@
             }
         }
 
-        class Enemy extends Entity {
-            constructor() {
-                super(canvas.width - 50, Math.random() * (canvas.height - 100) + 50, 30, 40, 0.5, 50, 10, '#ff4444');
+        class Projectile {
+            constructor(x, y, targetX, targetY, speed, damage, isEnemy) {
+                this.x = x;
+                this.y = y;
+                const angle = Math.atan2(targetY - y, targetX - x);
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.damage = damage;
+                this.isEnemy = isEnemy;
+                this.width = 6;
+                this.height = 6;
             }
 
             update() {
-                this.x -= this.speed;
+                this.x += this.vx;
+                this.y += this.vy;
+                return this.x < 0 || this.x > canvas.width || this.y < 0 || this.y > canvas.height;
+            }
+
+            draw() {
+                ctx.fillStyle = this.isEnemy ? '#ff0000' : '#00ff00';
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
+                ctx.fill();
+            }
+
+            checkCollision(entity) {
+                return this.x > entity.x && 
+                       this.x < entity.x + entity.width &&
+                       this.y > entity.y && 
+                       this.y < entity.y + entity.height;
+            }
+        }
+
+        class Enemy extends Entity {
+            constructor() {
+                super(canvas.width - 50, Math.random() * (canvas.height - 100) + 50, 30, 40, 0.5, 50, 10, '#ff4444');
+                this.lastShot = 0;
+                this.shootCooldown = 2000;
+                this.projectileSpeed = 3;
+                this.targetSoldier = null;
+            }
+
+            findPath(soldiers, obstacles) {
+                // Find the closest soldier
+                let closestSoldier = null;
+                let closestDistance = Infinity;
+                
+                for (const soldier of soldiers) {
+                    const distance = Math.hypot(soldier.x - this.x, soldier.y - this.y);
+                    if (distance < closestDistance) {
+                        closestDistance = distance;
+                        closestSoldier = soldier;
+                    }
+                }
+
+                if (closestSoldier) {
+                    this.targetSoldier = closestSoldier;
+                    // Calculate direction to soldier, avoiding obstacles
+                    const angle = Math.atan2(closestSoldier.y - this.y, closestSoldier.x - this.x);
+                    
+                    // Check if there's a clear path
+                    let blocked = false;
+                    for (const obstacle of obstacles) {
+                        if (this.checkLineIntersectsRect(
+                            this.x, this.y,
+                            closestSoldier.x, closestSoldier.y,
+                            obstacle
+                        )) {
+                            blocked = true;
+                            break;
+                        }
+                    }
+
+                    // If path is blocked, try to move around
+                    if (blocked) {
+                        this.x -= this.speed;
+                        if (this.y < canvas.height / 2) {
+                            this.y += this.speed;
+                        } else {
+                            this.y -= this.speed;
+                        }
+                    } else {
+                        this.x += Math.cos(angle) * this.speed;
+                        this.y += Math.sin(angle) * this.speed;
+                    }
+                } else {
+                    this.x -= this.speed;
+                }
+            }
+
+            checkLineIntersectsRect(x1, y1, x2, y2, rect) {
+                // Simple AABB check
+                const minX = Math.min(x1, x2);
+                const maxX = Math.max(x1, x2);
+                const minY = Math.min(y1, y2);
+                const maxY = Math.max(y1, y2);
+
+                return !(maxX < rect.x || minX > rect.x + rect.width ||
+                        maxY < rect.y || minY > rect.y + rect.height);
+            }
+
+            update(timestamp) {
+                this.findPath(gameState.soldiers, gameState.obstacles);
+
+                // Shoot at target
+                if (this.targetSoldier && timestamp - this.lastShot > this.shootCooldown) {
+                    gameState.projectiles.push(new Projectile(
+                        this.x, this.y + this.height/2,
+                        this.targetSoldier.x + this.targetSoldier.width/2,
+                        this.targetSoldier.y + this.targetSoldier.height/2,
+                        this.projectileSpeed,
+                        this.damage,
+                        true
+                    ));
+                    this.lastShot = timestamp;
+                }
+
+                // Return true if enemy is off screen
                 return this.x + this.width < 0;
+            }
+        }
+
+        class Obstacle extends Entity {
+            constructor(x, y) {
+                super(x, y, 40, 40, 0, 200, 0, '#666666');
+            }
+
+            draw() {
+                ctx.drawImage(obstacleSprite, this.x, this.y, this.width, this.height);
+                
+                // Health bar
+                ctx.fillStyle = 'red';
+                ctx.fillRect(this.x, this.y - 10, this.width, 5);
+                ctx.fillStyle = 'green';
+                ctx.fillRect(this.x, this.y - 10, (this.health / this.maxHealth) * this.width, 5);
             }
         }
 
         function spawnEnemy() {
             if (Date.now() - gameState.lastEnemySpawn > gameState.enemySpawnRate) {
-                gameState.enemies.push(new Enemy());
+                const enemy = new Enemy();
+                // Scale enemy stats with wave
+                enemy.health *= (1 + 0.1 * gameState.wave);
+                enemy.maxHealth = enemy.health;
+                enemy.damage *= (1 + 0.1 * gameState.wave);
+                enemy.speed *= (1 + 0.05 * gameState.wave);
+                gameState.enemies.push(enemy);
                 gameState.lastEnemySpawn = Date.now();
+                
+                // Increase difficulty
                 gameState.enemySpawnRate = Math.max(1000, gameState.enemySpawnRate - 50);
+                
+                // Check for new wave
+                if (gameState.score > gameState.wave * 1000) {
+                    gameState.wave++;
+                    // Spawn new obstacles every wave
+                    for (let i = 0; i < 2; i++) {
+                        const x = Math.random() * (canvas.width - 200) + 100;
+                        const y = Math.random() * (canvas.height - 100) + 50;
+                        gameState.obstacles.push(new Obstacle(x, y));
+                    }
+                }
             }
         }
 
@@ -219,10 +371,20 @@
             if (!gameState.paused) {
                 ctx.clearRect(0, 0, canvas.width, canvas.height);
 
+                // Draw wave number
+                ctx.fillStyle = 'white';
+                ctx.font = '20px Arial';
+                ctx.fillText(`Wave ${gameState.wave}`, canvas.width - 100, 30);
+
                 spawnEnemy();
 
+                // Update and draw obstacles
+                gameState.obstacles.forEach(obstacle => {
+                    obstacle.draw();
+                });
+
                 // Update and draw soldiers
-                gameState.soldiers.forEach(soldier => {
+                gameState.soldiers = gameState.soldiers.filter(soldier => {
                     soldier.update(timestamp);
                     soldier.draw();
 
@@ -241,6 +403,8 @@
                     if (closestEnemy) {
                         soldier.attack(closestEnemy);
                     }
+
+                    return soldier.health > 0;
                 });
 
                 // Update and draw enemies
@@ -252,7 +416,38 @@
                         moneyDisplay.textContent = gameState.money;
                         return false;
                     }
-                    return !enemy.update();
+                    return !enemy.update(timestamp);
+                });
+
+                // Update and draw projectiles
+                gameState.projectiles = gameState.projectiles.filter(projectile => {
+                    projectile.draw();
+                    
+                    // Check for collisions
+                    if (projectile.isEnemy) {
+                        for (const soldier of gameState.soldiers) {
+                            if (projectile.checkCollision(soldier)) {
+                                soldier.health -= projectile.damage;
+                                return false;
+                            }
+                        }
+                    } else {
+                        for (const enemy of gameState.enemies) {
+                            if (projectile.checkCollision(enemy)) {
+                                enemy.health -= projectile.damage;
+                                return false;
+                            }
+                        }
+                    }
+
+                    // Check for obstacle collisions
+                    for (const obstacle of gameState.obstacles) {
+                        if (projectile.checkCollision(obstacle)) {
+                            return false;
+                        }
+                    }
+
+                    return !projectile.update();
                 });
             }
 
