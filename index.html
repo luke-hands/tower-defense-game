@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tower Defense Battle</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #1a1a1a;
+            font-family: Arial, sans-serif;
+            touch-action: manipulation;
+        }
+
+        #gameContainer {
+            position: relative;
+            width: 640px;
+            height: 480px;
+        }
+
+        canvas {
+            border: 2px solid #333;
+            background-color: #2a2a2a;
+        }
+
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 10px;
+        }
+
+        .button {
+            background-color: #4CAF50;
+            border: none;
+            color: white;
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-block;
+            font-size: 16px;
+            margin: 4px 2px;
+            cursor: pointer;
+            border-radius: 4px;
+            transition: background-color 0.3s;
+        }
+
+        .button:hover {
+            background-color: #45a049;
+        }
+
+        .button:disabled {
+            background-color: #cccccc;
+            cursor: not-allowed;
+        }
+
+        #pauseButton {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+        }
+
+        #stats {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-size: 16px;
+            text-shadow: 1px 1px 2px black;
+        }
+
+        .upgrade-menu {
+            position: absolute;
+            display: none;
+            background: rgba(0, 0, 0, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="640" height="480"></canvas>
+        <div id="stats">Money: $<span id="money">100</span></div>
+        <button id="pauseButton" class="button">⏸️</button>
+        <div id="controls">
+            <button id="spawnButton" class="button">Spawn Soldier ($50)</button>
+            <button id="upgradeButton" class="button">Upgrade Menu</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const pauseButton = document.getElementById('pauseButton');
+        const spawnButton = document.getElementById('spawnButton');
+        const upgradeButton = document.getElementById('upgradeButton');
+        const moneyDisplay = document.getElementById('money');
+
+        let gameState = {
+            money: 100,
+            paused: false,
+            soldiers: [],
+            enemies: [],
+            lastEnemySpawn: 0,
+            enemySpawnRate: 3000,
+            score: 0
+        };
+
+        const SOLDIER_COST = 50;
+        const UPGRADE_COST = 100;
+
+        class Entity {
+            constructor(x, y, width, height, speed, health, damage, color) {
+                this.x = x;
+                this.y = y;
+                this.width = width;
+                this.height = height;
+                this.speed = speed;
+                this.health = health;
+                this.maxHealth = health;
+                this.damage = damage;
+                this.color = color;
+                this.level = 1;
+            }
+
+            draw() {
+                ctx.fillStyle = this.color;
+                ctx.fillRect(this.x, this.y, this.width, this.height);
+                
+                // Health bar
+                ctx.fillStyle = 'red';
+                ctx.fillRect(this.x, this.y - 10, this.width, 5);
+                ctx.fillStyle = 'green';
+                ctx.fillRect(this.x, this.y - 10, (this.health / this.maxHealth) * this.width, 5);
+
+                // Level indicator
+                ctx.fillStyle = 'white';
+                ctx.font = '12px Arial';
+                ctx.fillText(`Lv${this.level}`, this.x, this.y - 15);
+            }
+        }
+
+        class Soldier extends Entity {
+            constructor(x, y) {
+                super(x, y, 30, 40, 0, 100, 20, '#4CAF50');
+                this.attackCooldown = 0;
+                this.attackSpeed = 1000;
+                this.range = 200;
+            }
+
+            update(timestamp) {
+                if (this.attackCooldown > 0) {
+                    this.attackCooldown -= 16;
+                }
+            }
+
+            attack(enemy) {
+                if (this.attackCooldown <= 0) {
+                    enemy.health -= this.damage;
+                    this.attackCooldown = this.attackSpeed;
+                    
+                    // Visual feedback for attack
+                    ctx.beginPath();
+                    ctx.moveTo(this.x + this.width, this.y + this.height/2);
+                    ctx.lineTo(enemy.x, enemy.y + enemy.height/2);
+                    ctx.strokeStyle = '#ff0';
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+            }
+
+            upgrade() {
+                this.level++;
+                this.damage *= 1.5;
+                this.health *= 1.2;
+                this.maxHealth = this.health;
+                this.attackSpeed *= 0.9;
+                this.range *= 1.1;
+            }
+        }
+
+        class Enemy extends Entity {
+            constructor() {
+                super(canvas.width - 50, Math.random() * (canvas.height - 100) + 50, 30, 40, 0.5, 50, 10, '#ff4444');
+            }
+
+            update() {
+                this.x -= this.speed;
+                return this.x + this.width < 0;
+            }
+        }
+
+        function spawnEnemy() {
+            if (Date.now() - gameState.lastEnemySpawn > gameState.enemySpawnRate) {
+                gameState.enemies.push(new Enemy());
+                gameState.lastEnemySpawn = Date.now();
+                gameState.enemySpawnRate = Math.max(1000, gameState.enemySpawnRate - 50);
+            }
+        }
+
+        function updateGame(timestamp) {
+            if (!gameState.paused) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                spawnEnemy();
+
+                // Update and draw soldiers
+                gameState.soldiers.forEach(soldier => {
+                    soldier.update(timestamp);
+                    soldier.draw();
+
+                    // Find closest enemy in range
+                    let closestEnemy = null;
+                    let closestDistance = Infinity;
+                    
+                    gameState.enemies.forEach(enemy => {
+                        const distance = Math.hypot(enemy.x - soldier.x, enemy.y - soldier.y);
+                        if (distance < soldier.range && distance < closestDistance) {
+                            closestDistance = distance;
+                            closestEnemy = enemy;
+                        }
+                    });
+
+                    if (closestEnemy) {
+                        soldier.attack(closestEnemy);
+                    }
+                });
+
+                // Update and draw enemies
+                gameState.enemies = gameState.enemies.filter(enemy => {
+                    enemy.draw();
+                    if (enemy.health <= 0) {
+                        gameState.money += 25;
+                        gameState.score += 100;
+                        moneyDisplay.textContent = gameState.money;
+                        return false;
+                    }
+                    return !enemy.update();
+                });
+            }
+
+            requestAnimationFrame(updateGame);
+        }
+
+        canvas.addEventListener('click', (e) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+
+            // Only spawn in left third of screen
+            if (x < canvas.width / 3 && gameState.money >= SOLDIER_COST) {
+                gameState.soldiers.push(new Soldier(x, y - 20));
+                gameState.money -= SOLDIER_COST;
+                moneyDisplay.textContent = gameState.money;
+            }
+        });
+
+        upgradeButton.addEventListener('click', () => {
+            if (gameState.soldiers.length > 0 && gameState.money >= UPGRADE_COST) {
+                // Upgrade random soldier
+                const soldier = gameState.soldiers[Math.floor(Math.random() * gameState.soldiers.length)];
+                soldier.upgrade();
+                gameState.money -= UPGRADE_COST;
+                moneyDisplay.textContent = gameState.money;
+            }
+        });
+
+        pauseButton.addEventListener('click', () => {
+            gameState.paused = !gameState.paused;
+            pauseButton.textContent = gameState.paused ? '▶️' : '⏸️';
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            }
+        });
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            }
+            requestAnimationFrame(updateGame);
+        });
+    </script>
+</body>
+</html>
